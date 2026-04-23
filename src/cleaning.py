@@ -30,16 +30,19 @@ log = get_logger("cleaning")
 # ── IPRESS ────────────────────────────────────────────────────────────────────
 
 IPRESS_COL_MAP = {
-    "codigo":     ["codigo_renaes", "cod_renaes", "codigo", "renaes", "id_ipress", "codigo_his"],
-    "nombre":     ["nombre", "nombre_ipress", "razon_social", "establecimiento"],
-    "categoria":  ["categoria", "categoria_establecimiento", "nivel", "cat"],
-    "ubigeo":     ["ubigeo", "cod_ubigeo", "ubigeo_inei", "codigo_ubigeo"],
-    "distrito":   ["distrito", "nom_dis", "nombre_distrito"],
-    "provincia":  ["provincia", "nom_prov", "nombre_provincia"],
-    "departamento": ["departamento", "nom_dep", "nombre_departamento", "dpto"],
-    "latitud":    ["latitud", "lat", "latitude", "latitud_x"],
-    "longitud":   ["longitud", "lon", "lng", "longitude", "longitud_x"],
-    "estado":     ["estado", "estado_ipress", "activo", "condicion"],
+    "codigo":     ["Código Único", "codigo_renaes", "cod_renaes", "codigo", "renaes", "id_ipress"],
+    "nombre":     ["Nombre del establecimiento", "nombre", "nombre_ipress", "razon_social"],
+    "categoria":  ["Categoria", "Clasificación", "categoria", "categoria_establecimiento", "nivel"],
+    "ubigeo":     ["UBIGEO", "ubigeo", "cod_ubigeo", "ubigeo_inei"],
+    "distrito":   ["Distrito", "distrito", "nom_dis"],
+    "provincia":  ["Provincia", "provincia", "nom_prov"],
+    "departamento": ["Departamento", "departamento", "nom_dep", "dpto"],
+    # NOTE: In the MINSA IPRESS dataset the column named NORTE holds longitude
+    # and ESTE holds latitude (the values confirm this: NORTE ≈ -69 to -81 lon,
+    # ESTE ≈ -0 to -18 lat). We remap them accordingly.
+    "latitud":    ["ESTE", "latitud", "lat", "latitude"],
+    "longitud":   ["NORTE", "longitud", "lon", "longitude"],
+    "estado":     ["Estado", "estado", "estado_ipress", "activo"],
 }
 
 
@@ -71,7 +74,7 @@ def clean_ipress(df_raw: pd.DataFrame) -> pd.DataFrame:
     # Active facilities only
     if "estado" in df.columns:
         mask_active = df["estado"].astype(str).str.upper().isin(
-            ["ACTIVO", "1", "TRUE", "SI", "OPERATIVO", "HABILITADO"]
+            ["ACTIVO", "ACTIVADO", "1", "TRUE", "SI", "OPERATIVO", "HABILITADO"]
         )
         before = len(df)
         df = df[mask_active | df["estado"].isna()]
@@ -93,75 +96,94 @@ def clean_ipress(df_raw: pd.DataFrame) -> pd.DataFrame:
 # ── Centros Poblados ──────────────────────────────────────────────────────────
 
 CP_COL_MAP = {
-    "ubigeo":     ["ubigeo", "cod_ubigeo", "ubigeo_cp", "ubigeo_inei", "codcp", "cod_cp"],
-    "nombre":     ["nombre", "nombcp", "nombre_cp", "centro_poblado", "nomb_cp", "centro poblado"],
-    "distrito":   ["distrito", "nom_dis", "nombre_distrito"],
-    "provincia":  ["provincia", "nom_prov"],
-    "departamento": ["departamento", "nom_dep", "dpto"],
-    "latitud":    ["latitud", "lat", "latitude"],
-    "longitud":   ["longitud", "lon", "lng", "longitude"],
-    "tipo":       ["tipo", "tipo_cp", "tipo_ccpp", "categoria_cp"],
-    "poblacion":  ["poblacion", "pob", "pob_total", "total_pob", "habitantes"],
+    # IGN shapefile column names
+    "nombre":     ["NOM_POBLAD", "nombre", "nombcp", "centro_poblado"],
+    "tipo":       ["CAT_POBLAD", "CATEGORIA", "tipo", "tipo_cp"],
+    "distrito":   ["DIST", "distrito", "nom_dis"],
+    "provincia":  ["PROV", "provincia", "nom_prov"],
+    "departamento": ["DEP", "departamento", "nom_dep"],
+    # X = longitude, Y = latitude in the IGN shapefile
+    "longitud":   ["X", "longitud", "lon", "longitude"],
+    "latitud":    ["Y", "latitud", "lat", "latitude"],
 }
 
 
-def clean_centros_poblados(df_raw: pd.DataFrame) -> pd.DataFrame:
+def clean_centros_poblados(df_raw) -> gpd.GeoDataFrame:
+    """Accept either a GeoDataFrame (shapefile) or a plain DataFrame."""
     log.info("Cleaning Centros Poblados (%d rows)...", len(df_raw))
-    df = df_raw.copy()
-    df.columns = df.columns.str.strip()
 
+    # Normalise to GeoDataFrame
+    if isinstance(df_raw, gpd.GeoDataFrame):
+        gdf = df_raw.copy()
+    else:
+        df = df_raw.copy()
+        df.columns = df.columns.str.strip()
+        renamed = {}
+        for std_name, candidates in CP_COL_MAP.items():
+            col = find_col(df, candidates, required=(std_name in ("latitud", "longitud")))
+            if col:
+                renamed[col] = std_name
+        df.rename(columns=renamed, inplace=True)
+        df["latitud"]  = pd.to_numeric(df["latitud"],  errors="coerce")
+        df["longitud"] = pd.to_numeric(df["longitud"], errors="coerce")
+        df = df.dropna(subset=["latitud", "longitud"])
+        geometry = gpd.points_from_xy(df["longitud"], df["latitud"])
+        gdf = gpd.GeoDataFrame(df, geometry=geometry, crs=CRS_GEO)
+
+    # Rename columns using CP_COL_MAP
     renamed = {}
     for std_name, candidates in CP_COL_MAP.items():
-        col = find_col(df, candidates, required=(std_name in ("latitud", "longitud")))
-        if col:
+        col = find_col(gdf, candidates, required=False)
+        if col and col not in renamed:
             renamed[col] = std_name
-    df.rename(columns=renamed, inplace=True)
+    gdf.rename(columns=renamed, inplace=True)
 
-    df["latitud"]  = pd.to_numeric(df["latitud"],  errors="coerce")
-    df["longitud"] = pd.to_numeric(df["longitud"], errors="coerce")
+    # Ensure CRS = WGS84
+    if gdf.crs is None:
+        gdf = gdf.set_crs(CRS_GEO)
+    else:
+        gdf = gdf.to_crs(CRS_GEO)
 
-    before = len(df)
-    df = df.dropna(subset=["latitud", "longitud"])
-    df = df[
-        df["latitud"].between(-20.0, 1.0) &
-        df["longitud"].between(-82.0, -68.0)
-    ]
-    log.info("  Removed %d CP rows with invalid coords.", before - len(df))
+    # Coordinate filter using geometry bounds
+    before = len(gdf)
+    bounds = gdf.geometry.bounds
+    valid = (
+        bounds["miny"].between(-20.0, 1.0) &
+        bounds["minx"].between(-82.0, -68.0)
+    )
+    gdf = gdf[valid]
+    log.info("  Removed %d CP rows with invalid coords.", before - len(gdf))
 
-    if "ubigeo" in df.columns:
-        df["ubigeo"] = normalize_ubigeo(df["ubigeo"])
+    # Derive latitud/longitud columns from geometry for downstream use
+    gdf["latitud"]  = gdf.geometry.y
+    gdf["longitud"] = gdf.geometry.x
 
-    # Deduplicate by ubigeo + name
-    if "nombre" in df.columns and "ubigeo" in df.columns:
-        before = len(df)
-        df.drop_duplicates(subset=["ubigeo", "nombre"], inplace=True)
-        log.info("  Removed %d duplicate CP rows.", before - len(df))
+    # Deduplicate by name + approximate location
+    if "nombre" in gdf.columns:
+        before = len(gdf)
+        gdf = gdf.drop_duplicates(subset=["nombre", "latitud", "longitud"])
+        log.info("  Removed %d duplicate CP rows.", before - len(gdf))
 
-    if "poblacion" in df.columns:
-        df["poblacion"] = pd.to_numeric(df["poblacion"], errors="coerce").fillna(0).astype(int)
-
-    log.info("  Final CP rows: %d", len(df))
-    out = DATA_PROC / "centros_poblados_clean.csv"
-    df.to_csv(out, index=False)
+    log.info("  Final CP rows: %d", len(gdf))
+    out = DATA_PROC / "centros_poblados_clean.geojson"
+    gdf.to_file(out, driver="GeoJSON")
     log.info("  Saved → %s", out)
-    return df
+    return gdf
 
 
 # ── Emergencias ───────────────────────────────────────────────────────────────
 
 EMERG_COL_MAP = {
-    "codigo":     ["codigo_renaes", "cod_renaes", "codigo_ipress", "renaes", "codigo_hm"],
-    "nombre":     ["nombre_ipress", "nombre", "establecimiento", "razon_social"],
-    "ubigeo":     ["ubigeo", "cod_ubigeo", "ubigeo_ipress"],
-    "distrito":   ["distrito", "nom_dis", "nombre_distrito"],
-    "departamento": ["departamento", "nom_dep", "diresa", "dpto"],
-    "anio":       ["anio", "año", "year", "periodo", "ejercicio"],
-    "mes":        ["mes", "month", "periodo_mes"],
-    # The emergency total might be a single column or multiple
+    "codigo":     ["CO_IPRESS", "codigo_renaes", "cod_renaes", "codigo_ipress"],
+    "nombre":     ["RAZON_SOC", "nombre_ipress", "nombre", "razon_social"],
+    "ubigeo":     ["UBIGEO", "ubigeo", "cod_ubigeo"],
+    "distrito":   ["DISTRITO", "distrito", "nom_dis"],
+    "departamento": ["DEPARTAMENTO", "departamento", "nom_dep"],
+    "anio":       ["ANHO", "anio", "año", "year"],
+    "mes":        ["MES", "mes", "month"],
     "total":      [
-        "total", "em_total", "total_emergencias", "total_atenciones_emergencia",
-        "emergencias_total", "n_emergencias", "cant_emergencias",
-        "num_emergencias", "atencion_emergencia", "atenciones_emergencia",
+        "NRO_TOTAL_ATENCIONES", "NRO_TOTAL_ATENDIDOS",
+        "total", "em_total", "total_emergencias", "n_emergencias",
     ],
 }
 
@@ -230,11 +252,11 @@ def clean_emergencias(df_raw: pd.DataFrame, df_ipress_clean: pd.DataFrame | None
 # ── Distritos ─────────────────────────────────────────────────────────────────
 
 DIST_COL_MAP = {
-    "ubigeo":       ["ubigeo", "cod_ubigeo", "ubigeo_inei", "codgeo", "iddist", "id_dist"],
-    "distrito":     ["distrito", "nom_dis", "nombdist", "nombre_distrito", "distrito_nombre"],
-    "provincia":    ["provincia", "nom_prov", "nombprov"],
-    "departamento": ["departamento", "nom_dep", "nombdep", "dpto"],
-    "poblacion":    ["poblacion", "pob_total", "pob2017", "pob", "habitantes"],
+    "ubigeo":       ["IDDIST", "ubigeo", "cod_ubigeo", "ubigeo_inei", "codgeo"],
+    "distrito":     ["DISTRITO", "distrito", "nom_dis", "nombdist"],
+    "provincia":    ["PROVINCIA", "provincia", "nom_prov", "nombprov"],
+    "departamento": ["DEPARTAMEN", "departamento", "nom_dep", "nombdep"],
+    "poblacion":    ["poblacion", "pob_total", "pob2017", "pob"],
 }
 
 
