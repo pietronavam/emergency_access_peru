@@ -145,11 +145,22 @@ def compute_composite(
         weights["access"]     * g[f"comp_access{suffix}"]
     )
 
-    # Quartile classification
-    labels = ["Underserved", "Moderate-Low", "Moderate-High", "Well-served"]
-    g[f"category{suffix}"] = pd.qcut(
-        g[f"ehai{suffix}"], q=4, labels=labels, duplicates="drop"
-    ).astype(str)
+    # Quartile classification (robust to ties / few unique values)
+    all_labels = ["Underserved", "Moderate-Low", "Moderate-High", "Well-served"]
+    for q in [4, 3, 2]:
+        try:
+            labels = all_labels[:q]
+            g[f"category{suffix}"] = pd.qcut(
+                g[f"ehai{suffix}"], q=q, labels=labels, duplicates="drop"
+            ).astype(str)
+            break
+        except ValueError:
+            continue
+    else:
+        median = g[f"ehai{suffix}"].median()
+        g[f"category{suffix}"] = g[f"ehai{suffix}"].apply(
+            lambda x: "Well-served" if x >= median else "Underserved"
+        )
 
     log.info("  %s EHAI — mean=%.3f  std=%.3f", spec, g[f"ehai{suffix}"].mean(), g[f"ehai{suffix}"].std())
     return g

@@ -92,39 +92,36 @@ def load_ipress() -> pd.DataFrame:
     return df
 
 
-# ── 2. Centros Poblados ───────────────────────────────────────────────────────
+# ── 2. Centros Poblados (shapefile from IGN) ──────────────────────────────────
+# Dataset arrives as a ZIP of shapefiles (CCPP_IGN100K.shp)
 
-CP_PORTAL  = "https://www.datosabiertos.gob.pe"
-CP_PACKAGE = "dataset-centros-poblados"
-CP_FILE    = DATA_RAW / "centros_poblados.csv"
+CP_SHP_FILE = DATA_RAW / "CCPP_IGN100K.shp"
+CP_ZIP_URL  = "https://www.datosabiertos.gob.pe/sites/default/files/CCPP_0.zip"
 
 
 def download_centros_poblados(force: bool = False) -> Path:
-    if CP_FILE.exists() and not force:
-        log.info("Centros Poblados file already present: %s", CP_FILE)
-        return CP_FILE
-    resources = _ckan_resource_urls(CP_PORTAL, CP_PACKAGE)
-    res = _best_resource(resources, ("CSV", "XLSX", "XLS"))
-    if res is None:
-        _manual_instruction(
-            "Centros Poblados",
-            "https://www.datosabiertos.gob.pe/dataset/dataset-centros-poblados",
-            CP_FILE,
-        )
-        raise FileNotFoundError(f"Could not auto-download Centros Poblados. Place file at {CP_FILE}")
-    ext = res.get("format", "CSV").lower()
-    dest = DATA_RAW / f"centros_poblados.{ext}"
-    _download(res["url"], dest)
-    if dest != CP_FILE:
-        dest.rename(CP_FILE)
-    return CP_FILE
+    if CP_SHP_FILE.exists() and not force:
+        log.info("Centros Poblados shapefile already present: %s", CP_SHP_FILE)
+        return CP_SHP_FILE
+    import io, zipfile
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    log.info("Downloading Centros Poblados ZIP...")
+    r = requests.get(CP_ZIP_URL, headers=headers, timeout=120, stream=True)
+    r.raise_for_status()
+    raw = b""
+    for chunk in r.iter_content(1 << 20):
+        raw += chunk
+    z = zipfile.ZipFile(io.BytesIO(raw))
+    z.extractall(DATA_RAW)
+    log.info("Extracted Centros Poblados shapefile to %s", DATA_RAW)
+    return CP_SHP_FILE
 
 
-def load_centros_poblados() -> pd.DataFrame:
-    _ensure_file(CP_FILE, download_centros_poblados)
-    df = _read_tabular(CP_FILE)
-    log.info("Centros Poblados loaded: %d rows, %d cols", *df.shape)
-    return df
+def load_centros_poblados() -> gpd.GeoDataFrame:
+    _ensure_file(CP_SHP_FILE, download_centros_poblados)
+    gdf = gpd.read_file(CP_SHP_FILE)
+    log.info("Centros Poblados loaded: %d rows, %d cols", *gdf.shape)
+    return gdf
 
 
 # ── 3. Emergency production (SUSALUD C1) ─────────────────────────────────────

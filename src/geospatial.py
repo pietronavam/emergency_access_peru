@@ -51,10 +51,14 @@ def build_gdf_ipress(df: pd.DataFrame) -> gpd.GeoDataFrame:
     return gdf
 
 
-def build_gdf_cp(df: pd.DataFrame) -> gpd.GeoDataFrame:
-    """Convert clean Centros Poblados DataFrame to GeoDataFrame."""
-    lat = find_col(df, ["latitud", "lat", "latitude"])
-    lon = find_col(df, ["longitud", "lon", "longitude"])
+def build_gdf_cp(df) -> gpd.GeoDataFrame:
+    """Convert clean Centros Poblados (DataFrame or GeoDataFrame) to GeoDataFrame."""
+    if isinstance(df, gpd.GeoDataFrame) and df.geometry.notna().any():
+        gdf = df.to_crs(CRS_GEO)
+        log.info("Centros Poblados GeoDataFrame (from shapefile): %d points", len(gdf))
+        return gdf
+    lat = find_col(df, ["latitud", "lat", "latitude", "Y"])
+    lon = find_col(df, ["longitud", "lon", "longitude", "X"])
     geometry = gpd.points_from_xy(df[lon], df[lat])
     gdf = gpd.GeoDataFrame(df, geometry=geometry, crs=CRS_GEO)
     log.info("Centros Poblados GeoDataFrame: %d points", len(gdf))
