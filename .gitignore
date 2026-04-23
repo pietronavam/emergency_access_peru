@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.env
+data/raw/
+data/processed/
+output/
+.streamlit/
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
