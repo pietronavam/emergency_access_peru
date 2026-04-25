@@ -74,33 +74,42 @@ def join_points_to_districts(
 ) -> gpd.GeoDataFrame:
     """
     Spatial join: assign each point to its containing district polygon.
+    Result always has a column 'ubigeo_dist' with the assigned district ubigeo.
     Points outside all polygons are assigned via nearest-district fallback.
     """
     log.info("Joining %s to districts...", point_label)
 
-    pts  = gdf_points.to_crs(CRS_GEO)
-    dist = gdf_districts.to_crs(CRS_GEO)
+    pts  = gdf_points.to_crs(CRS_GEO).copy()
+    dist = gdf_districts.to_crs(CRS_GEO).copy()
 
-    # Ensure districts have ubigeo
+    # Ensure districts have ubigeo; rename to avoid collision with points' own ubigeo
     ubigeo_col = find_col(dist, ["ubigeo", "cod_ubigeo", "ubigeo_inei"], required=False)
-    if ubigeo_col and ubigeo_col != "ubigeo":
-        dist = dist.rename(columns={ubigeo_col: "ubigeo"})
+    if ubigeo_col:
+        dist = dist.rename(columns={ubigeo_col: "_dist_ubigeo"})
 
-    joined = gpd.sjoin(pts, dist[["ubigeo", "geometry"]], how="left", predicate="within")
-    joined = joined.rename(columns={"ubigeo_right": "ubigeo_dist"}) if "ubigeo_right" in joined.columns else joined
+    joined = gpd.sjoin(pts, dist[["_dist_ubigeo", "geometry"]], how="left", predicate="within")
 
-    # Fallback for points outside all polygons (islands, border artefacts)
-    missing_mask = joined["ubigeo"].isna() if "ubigeo" in joined.columns else joined["ubigeo_dist"].isna()
-    if missing_mask.sum() > 0:
-        log.info("  %d %s outside polygon — using nearest-district fallback.", missing_mask.sum(), point_label)
+    # After sjoin _dist_ubigeo might get a suffix if it collided; find it
+    dist_ub_col = next(
+        (c for c in joined.columns if "_dist_ubigeo" in c), None
+    )
+    joined["ubigeo_dist"] = joined[dist_ub_col] if dist_ub_col else np.nan
+
+    # Fallback for points outside all polygons
+    missing_mask = joined["ubigeo_dist"].isna()
+    n_missing = int(missing_mask.sum())
+    if n_missing > 0:
+        log.info("  %d %s outside polygon — using nearest-district fallback.", n_missing, point_label)
         pts_miss  = pts[missing_mask].to_crs(CRS_PROJ)
         dist_proj = dist.to_crs(CRS_PROJ)
-        nearest   = gpd.sjoin_nearest(pts_miss, dist_proj[["ubigeo", "geometry"]], how="left")
-        ub_col_near = "ubigeo_right" if "ubigeo_right" in nearest.columns else "ubigeo"
-        joined.loc[missing_mask, "ubigeo"] = nearest[ub_col_near].values
+        nearest   = gpd.sjoin_nearest(pts_miss, dist_proj[["_dist_ubigeo", "geometry"]], how="left")
+        nearest   = nearest[~nearest.index.duplicated(keep="first")]
+        ub_near   = next((c for c in nearest.columns if "_dist_ubigeo" in c), None)
+        if ub_near:
+            joined.loc[missing_mask, "ubigeo_dist"] = nearest[ub_near].values
 
-    assigned = (~joined["ubigeo"].isna()).sum() if "ubigeo" in joined.columns else "?"
-    log.info("  %s: %s/%d assigned to a district.", point_label, assigned, len(pts))
+    assigned = int((~joined["ubigeo_dist"].isna()).sum())
+    log.info("  %s: %d/%d assigned to a district.", point_label, assigned, len(pts))
     return joined
 
 
@@ -176,21 +185,15 @@ def build_district_access_table(
 
     # ── 1. Facility counts per district ──────────────────────────────────────
     ip = gdf_ipress_with_ubigeo.copy()
+    ip["ubigeo"] = ip["ubigeo_dist"].astype(str).str.strip().str.zfill(6)
 
-    # Determine ubigeo column in joined ipress
-    ub_col = find_col(ip, ["ubigeo", "ubigeo_dist"], required=False) or "ubigeo"
-    if ub_col not in ip.columns and "ubigeo_right" in ip.columns:
-        ip["ubigeo"] = ip["ubigeo_right"]
-        ub_col = "ubigeo"
-
-    fac_counts = ip.groupby(ub_col).agg(
+    fac_counts = ip.groupby("ubigeo").agg(
         n_facilities=("geometry", "count"),
-    ).reset_index().rename(columns={ub_col: "ubigeo"})
+    ).reset_index()
 
     if "categoria" in ip.columns:
         hicat = ip[ip["categoria"].isin(HIGH_CAPACITY_CATEGORIES)]
-        hicat_counts = hicat.groupby(ub_col).size().reset_index(name="n_hicat_facilities")
-        hicat_counts.rename(columns={ub_col: "ubigeo"}, inplace=True)
+        hicat_counts = hicat.groupby("ubigeo").size().reset_index(name="n_hicat_facilities")
         fac_counts = fac_counts.merge(hicat_counts, on="ubigeo", how="left")
         fac_counts["n_hicat_facilities"] = fac_counts["n_hicat_facilities"].fillna(0).astype(int)
     else:
@@ -198,9 +201,7 @@ def build_district_access_table(
 
     # ── 2. Populated-centre access fractions per district ─────────────────────
     cp = gdf_cp_with_dist.copy()
-    ub_col_cp = find_col(cp, ["ubigeo", "ubigeo_dist"], required=False)
-    if ub_col_cp and ub_col_cp != "ubigeo":
-        cp["ubigeo"] = cp[ub_col_cp]
+    cp["ubigeo"] = cp["ubigeo_dist"].astype(str).str.strip().str.zfill(6)
 
     if "dist_nearest_any_m" not in cp.columns:
         cp["dist_nearest_any_m"] = np.nan
