@@ -109,18 +109,15 @@ streamlit run app.py
 
 ## Main findings
 
-> *Run the pipeline to populate this section with actual results.*
+Analysis of **1,873 districts** using 7,952 IPRESS facilities, 136,543 populated centres, and 704,085 emergency consultation records (2022–2024):
 
-Preliminary analytical expectations based on literature:
-
-- Districts in **Amazonia** (Loreto, Ucayali) and **southern highland** regions
-  (Puno, Apurímac) are expected to score lowest on spatial access due to
-  geographic isolation and low facility density.
-- **Lima Metropolitana** districts should score highest on all three
-  components.
-- The **alternative specification** (weighting spatial access 60%) is expected
-  to widen the gap between rural and urban districts relative to the baseline,
-  as rural districts are most penalised by proximity-based definitions.
+- **Lima** district scores highest (EHAI = 0.996): 44 facilities, 100% of populated centres within 5 km, 2.8 million emergency consultations.
+- **Pisacoma, Kelluyo, Huacullani** (Puno) and **Iray, Tipan** (Arequipa) score 0.0 — zero facilities, zero emergency activity, zero spatial access.
+- **469 districts (25%)** are classified as *Underserved* under the baseline specification.
+- The median district has **83.7%** of its populated centres within 5 km of any IPRESS.
+- **55 districts** have no IPRESS facility whatsoever.
+- The alternative specification (spatial access weighted 60%, high-capacity facilities only, 10 km threshold) reclassifies **1,405/1,873 districts**, confirming that the choice of access definition is methodologically consequential.
+- Geographic pattern: underserved districts are concentrated in **Puno, Arequipa highlands, Loreto, and Ucayali** — consistent with known infrastructure deficits in remote Andean and Amazonian regions.
 
 ---
 
